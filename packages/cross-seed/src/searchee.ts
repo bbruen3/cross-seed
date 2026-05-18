@@ -67,7 +67,8 @@ export type SearcheeLabel =
 	| Label.RSS
 	| Label.INJECT
 	| Label.ANNOUNCE
-	| Label.WEBHOOK;
+	| Label.WEBHOOK
+	| Label.OPPORTUNITY;
 
 export interface Searchee {
 	/**

@@ -2,6 +2,10 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, authedProcedure } from "../index.js";
 import { db } from "../../db.js";
+import {
+	OPPORTUNITY_SEARCH_SCHEMA,
+	searchOpportunities,
+} from "../../opportunity.js";
 import { findAllSearchees, bulkSearchByNames } from "../../pipeline.js";
 import { Label } from "../../logger.js";
 import { getSearcheeSource } from "../../searchee.js";
@@ -193,5 +197,10 @@ export const searcheesRouter = router({
 				totalFound,
 				skipped: Math.max(requested - attempted, 0),
 			};
+		}),
+	opportunitySearch: authedProcedure
+		.input(OPPORTUNITY_SEARCH_SCHEMA)
+		.query(async ({ input }) => {
+			return searchOpportunities(input);
 		}),
 });

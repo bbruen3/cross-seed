@@ -64,7 +64,7 @@ export interface IdSearchParams {
 	tvmazeid?: string;
 }
 
-interface Query extends IdSearchParams {
+export interface Query extends IdSearchParams {
 	t: "caps" | "search" | "tvsearch" | "movie";
 	q?: string;
 	limit?: number;
@@ -227,7 +227,7 @@ function parseTorznabCaps(xml: TorznabCaps): Caps {
 	};
 }
 
-async function createTorznabSearchQueries(
+export async function createTorznabSearchQueries(
 	searchee: Searchee,
 	mediaType: MediaType,
 	caps: Caps,
@@ -822,7 +822,7 @@ async function makeRequest(
 	return candidates;
 }
 
-async function makeRequests(
+export async function makeRequests(
 	indexers: Indexer[],
 	searcheeLabel: string,
 	getQueriesForIndexer: (indexer: Indexer) => Promise<Query[]>,

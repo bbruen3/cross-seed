@@ -15,6 +15,10 @@ import {
 import { checkJobs, getJobLastRun, getJobs, JobName } from "../jobs.js";
 import { Label, logger } from "../logger.js";
 import {
+	OPPORTUNITY_SEARCH_SCHEMA,
+	searchOpportunities,
+} from "../opportunity.js";
+import {
 	Candidate,
 	checkNewCandidateMatch,
 	searchForLocalTorrentByCriteria,
@@ -410,6 +414,45 @@ export async function baseApiPlugin(app: FastifyInstance) {
 		const message = `${job.name}: running ahead of schedule`;
 		logger.info({ label: Label.SCHEDULER, message });
 		return reply.code(200).send(message);
+	});
+
+	/**
+	 * Search for cross-seed opportunities by title + year.
+	 * Read-only — no injection, no DB writes.
+	 */
+	app.post<{
+		Querystring: { apikey?: string };
+	}>("/search/opportunity", async (request, reply) => {
+		if (!(await authorize(request, reply))) return;
+
+		let data;
+		try {
+			data = request.body;
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			logger.error({ label: Label.SERVER, message });
+			return reply.code(400).send(message);
+		}
+
+		const parsed = OPPORTUNITY_SEARCH_SCHEMA.safeParse(data);
+		if (!parsed.success) {
+			return reply.code(400).send({
+				code: "VALIDATION_ERROR",
+				message: parsed.error.issues
+					.map((i) => `${i.path.join(".")}: ${i.message}`)
+					.join("; "),
+			});
+		}
+
+		try {
+			const response = await searchOpportunities(parsed.data);
+			return reply.code(200).send(response);
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			logger.error({ label: Label.OPPORTUNITY, message });
+			logger.debug(e);
+			return reply.code(500).send({ code: "INTERNAL_ERROR", message });
+		}
 	});
 
 	/**

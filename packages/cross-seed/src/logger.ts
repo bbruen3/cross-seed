@@ -30,6 +30,7 @@ export enum Label {
 	SONARR = "sonarr",
 	AUTH = "auth",
 	INDEX = "index",
+	OPPORTUNITY = "opportunity",
 }
 
 export let logger: winston.Logger;
