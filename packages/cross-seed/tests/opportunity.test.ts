@@ -364,15 +364,16 @@ describe("rankOpportunities", () => {
 			makeResult("bbb", ["MyTracker"], 2000),
 		];
 		const { items, gold } = rankOpportunities(results, "MyTracker");
-		const bbbItem = items.find((i) => i.infoHash === "bbb")!;
-		const aaaItem = items.find((i) => i.infoHash === "aaa")!;
-		expect(bbbItem.score).toBeGreaterThan(aaaItem.score);
-		expect(bbbItem.availableOnGoldenTracker).toBe(true);
-		expect(aaaItem.availableOnGoldenTracker).toBe(false);
+		// Only the golden-tracker result is returned; non-golden is filtered out
+		expect(items).toHaveLength(1);
+		expect(items[0].infoHash).toBe("bbb");
+		expect(items[0].availableOnGoldenTracker).toBe(true);
+		expect(items[0].score).toBe(150); // 1*100 + 0 (no res) + 50 (golden)
 		expect(gold).toBeDefined();
 		expect(gold!.name).toBe("MyTracker");
+		expect(gold!.totalResults).toBe(1);
 		expect(gold!.availableOnGolden).toBe(1);
-		expect(gold!.notAvailableOnGolden).toBe(1);
+		expect(gold!.notAvailableOnGolden).toBe(0);
 	});
 
 	it("returns null golden tracker when not specified", () => {

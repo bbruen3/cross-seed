@@ -144,7 +144,10 @@ function parseTorznabResults(
 			item?.jackettindexer?.[0]?._ ??
 			item?.indexer?.[0]?._ ??
 			UNKNOWN_TRACKER
-		).trim(),
+		)
+			.trim()
+			.replace(/\s*\(API\)\s*$/, "")
+			.replace(/\s*\(RSS\)\s*$/, ""),
 		link: item.link[0],
 		size: Number(item.size[0]),
 		pubDate: new Date(item.pubDate[0]).getTime(),

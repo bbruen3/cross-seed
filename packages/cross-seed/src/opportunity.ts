@@ -277,9 +277,12 @@ export function scorePhase1Groups(
 
 		group.passesPreFilter = sizeOk && metaOk;
 
-		// Score: primary weight on unique tracker count
+		// Score: primary weight on unique tracker count + resolution bonus
 		const uniqueTrackers = new Set(group.trackers).size;
-		group.score = uniqueTrackers * 100;
+		const resolutionBonus = getResolutionBonus(
+			group.candidates[0]?.name ?? "",
+		);
+		group.score = uniqueTrackers * 100 + resolutionBonus;
 	}
 
 	return groups;
@@ -372,6 +375,7 @@ export interface Phase2Result {
 export interface Phase2Outcome {
 	confirmed: Phase2Result[];
 	trackerFetchFailures: number;
+	groupsFetched: number;
 }
 
 const DEFAULT_TOP_N = 5;
@@ -417,46 +421,59 @@ export async function runPhase2(
 
 		if (fetchedResults.length === 0) continue; // whole group dropped
 
-		// Re-group by confirmed infoHash
-		const infoHashMap = new Map<string, typeof fetchedResults>();
-		for (const fr of fetchedResults) {
-			const ih = fr.metafile.infoHash;
-			if (!infoHashMap.has(ih)) infoHashMap.set(ih, []);
-			infoHashMap.get(ih)!.push(fr);
+		// Produce ONE confirmed result per Phase1Group.
+		// We do NOT re-group by infoHash here because the user wants to see
+		// how many trackers have the *release*, not how many unique infoHashes
+		// exist for it.  If infoHashes genuinely differ that is a separate concern
+		// (e.g. different encodes disguised as the same release).
+		//
+		// 1. InfoHash collision: filter out any results whose infoHash is already
+		//    in the client.  If ALL collide, skip the group entirely.
+		const nonExcluded = fetchedResults.filter(
+			(fr) => !infoHashesToExclude.has(fr.metafile.infoHash),
+		);
+		if (nonExcluded.length === 0) continue;
+
+		// 2. Blocklist check against any surviving torrent name.
+		const anyBlocked = nonExcluded.some((fr) =>
+			blockList.some((entry) =>
+				fr.metafile.name.toLowerCase().includes(entry.toLowerCase()),
+			),
+		);
+		if (anyBlocked) continue;
+
+		// 3. Size consistency: Torznab-reported size vs. fetched metafile length.
+		const metafileLength = nonExcluded[0].metafile.length;
+		const torznabSize = nonExcluded[0].candidate.size ?? 0;
+		if (
+			torznabSize > 0 &&
+			!sizesAreWithinTolerance(metafileLength, torznabSize)
+		) {
+			continue;
 		}
 
-		for (const [infoHash, frs] of infoHashMap) {
-			// InfoHash collision check
-			if (infoHashesToExclude.has(infoHash)) continue;
+		// 4. Collect unique trackers from ALL surviving fetched results.
+		const trackers = [
+			...new Set(
+				nonExcluded
+					.map((fr) => fr.candidate.tracker)
+					.filter(isTruthy),
+			),
+		];
 
-			// Blocklist check
-			const isBlocked = blockList.some((entry) => {
-				// Name check
-				if (frs[0].metafile.name.toLowerCase().includes(entry.toLowerCase())) return true;
-				return false;
-			});
-			if (isBlocked) continue;
-
-			// Size consistency check
-			const metafileLength = frs[0].metafile.length;
-			const torznabSize = frs[0].candidate.size ?? 0;
-			if (torznabSize > 0 && !sizesAreWithinTolerance(metafileLength, torznabSize)) continue;
-
-			const trackers = frs.map((fr) => fr.candidate.tracker).filter(isTruthy);
-			confirmed.push({
-				infoHash,
-				torrentName: frs[0].metafile.name,
-				trackers,
-				size: metafileLength,
-				matchDecision: "CONFIRMED_AVAILABLE",
-				verification: "fetched",
-				pubDate: frs[0].candidate.pubDate ?? 0,
-				link: frs[0].candidate.link,
-			});
-		}
+		confirmed.push({
+			infoHash: nonExcluded[0].metafile.infoHash,
+			torrentName: nonExcluded[0].metafile.name,
+			trackers,
+			size: metafileLength,
+			matchDecision: "CONFIRMED_AVAILABLE",
+			verification: "fetched",
+			pubDate: nonExcluded[0].candidate.pubDate ?? 0,
+			link: nonExcluded[0].candidate.link,
+		});
 	}
 
-	return { confirmed, trackerFetchFailures };
+	return { confirmed, trackerFetchFailures, groupsFetched: eligible.length };
 }
 
 // ──────────────────────────────────────────────
@@ -486,8 +503,10 @@ export function rankOpportunities(
 			);
 
 		const trackerCount = uniqueTrackers.length;
+		const resolutionBonus = getResolutionBonus(r.torrentName);
 		const score =
 			trackerCount * 100 +
+			resolutionBonus +
 			(availableOnGolden ? 50 : 0);
 
 		return {
@@ -507,20 +526,29 @@ export function rankOpportunities(
 
 	items.sort((a, b) => b.score - a.score);
 
+	// When goldenTracker is specified, only return results available on that
+	// tracker — non-golden results are irrelevant because the user can only
+	// cross-seed from the golden tracker.
+	const displayed =
+		goldenTracker !== undefined
+			? items.filter((i) => i.availableOnGoldenTracker)
+			: items;
+
 	const gold: GoldenTrackerCoverage | null =
 		goldenTracker !== undefined
 			? {
 					name: goldenTracker,
-					totalResults: items.length,
-					availableOnGolden: items.filter((i) => i.availableOnGoldenTracker)
-						.length,
-					notAvailableOnGolden: items.filter(
+					totalResults: displayed.length,
+					availableOnGolden: displayed.filter(
+						(i) => i.availableOnGoldenTracker,
+					).length,
+					notAvailableOnGolden: displayed.filter(
 						(i) => !i.availableOnGoldenTracker,
 					).length,
 				}
 			: null;
 
-	return { items, gold };
+	return { items: displayed, gold };
 }
 
 // ──────────────────────────────────────────────
@@ -598,6 +626,7 @@ export async function searchOpportunities(
 	// Phase 2: fetch and confirm (if requested)
 	let finalItems: OpportunityItem[];
 	let trackerFetchFailures = 0;
+	let candidatesFetched = 0;
 
 	if (phase === "confirmed") {
 		const outcome = await runPhase2(
@@ -606,6 +635,7 @@ export async function searchOpportunities(
 			blockList,
 		);
 		trackerFetchFailures = outcome.trackerFetchFailures;
+		candidatesFetched = outcome.groupsFetched;
 		const { items, gold: _gold } = rankOpportunities(
 			outcome.confirmed,
 			input.goldenTracker,
@@ -613,9 +643,21 @@ export async function searchOpportunities(
 		finalItems = items;
 	} else {
 		// Lightweight: use Phase-1 groups directly with heuristic decisions
-		finalItems = scoredGroups
+		const passing = scoredGroups
 			.filter((g) => g.passesPreFilter)
-			.sort((a, b) => b.score - a.score)
+			.filter((g) => {
+				// When goldenTracker is specified, restrict to groups that
+				// include that tracker
+				if (input.goldenTracker === undefined) return true;
+				return g.trackers.some(
+					(t) =>
+						t.toLowerCase() === input.goldenTracker!.toLowerCase(),
+				);
+			})
+			.sort((a, b) => b.score - a.score);
+		candidatesFetched = Math.min(passing.length, DEFAULT_TOP_N);
+		finalItems = passing
+			.slice(0, DEFAULT_TOP_N)
 			.map((g) => ({
 				infoHash: null,
 				torrentName: g.candidates[0]?.name ?? "",
@@ -660,8 +702,7 @@ export async function searchOpportunities(
 			indexersQueried,
 			indexersRateLimited,
 			candidatesEvaluated,
-			candidatesFetched: scoredGroups.filter((g) => g.passesPreFilter)
-				.length,
+			candidatesFetched,
 			trackerFetchFailures,
 			phase,
 			duration,
@@ -687,6 +728,20 @@ const SOURCE_REGEXES: Record<string, RegExp> = {
 	PCOK: /\b(pcok)\b/i,
 	PMTP: /\b(pmtp|Paramount Plus)\b/i,
 };
+
+/**
+ * Resolution bonus for scoring: 2160p=40, 1080p=20, 720p=10, else 0.
+ */
+function getResolutionBonus(torrentName: string): number {
+	const res = torrentName
+		.match(RES_STRICT_REGEX)
+		?.groups?.res?.trim()
+		?.toLowerCase();
+	if (res?.includes("2160")) return 40;
+	if (res?.includes("1080")) return 20;
+	if (res?.includes("720")) return 10;
+	return 0;
+}
 
 function extractInt(str: string): number {
 	return parseInt(str.replace(/\D/g, ""), 10) || 0;
