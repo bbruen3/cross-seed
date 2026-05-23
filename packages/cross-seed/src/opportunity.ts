@@ -22,6 +22,8 @@ import { cleanTitle, isTruthy } from "./utils.js";
 
 const currentYear = new Date().getFullYear();
 
+export const RESOLUTION_VALUES = ["2160p", "1080p", "720p"] as const;
+
 export const OPPORTUNITY_SEARCH_SCHEMA = z
 	.object({
 		title: z.string().min(1, "Title is required"),
@@ -49,6 +51,7 @@ export const OPPORTUNITY_SEARCH_SCHEMA = z
 			.int()
 			.positive()
 			.optional(),
+		resolution: z.enum(RESOLUTION_VALUES).optional(),
 		goldenTracker: z.string().min(1).optional(),
 		phase: z
 			.enum(["lightweight", "confirmed"])
@@ -113,7 +116,9 @@ export interface OpportunitySearchResponse {
 export function createVirtualSearchee(
 	input: OpportunitySearchInput,
 ): Searchee {
-	const name = `${input.title} ${input.year}`;
+	const name = input.resolution
+		? `${input.title} ${input.year} ${input.resolution}`
+		: `${input.title} ${input.year}`;
 	const placeholderFile = {
 		name: "placeholder.mkv",
 		path: "placeholder.mkv",

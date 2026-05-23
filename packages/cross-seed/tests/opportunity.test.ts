@@ -126,6 +126,60 @@ describe("OPPORTUNITY_SEARCH_SCHEMA", () => {
 		});
 		expect(result.success).toBe(false);
 	});
+
+	it("accepts valid resolution 2160p", () => {
+		const result = OPPORTUNITY_SEARCH_SCHEMA.safeParse({
+			title: "Inception",
+			year: 2010,
+			resolution: "2160p",
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("accepts valid resolution 1080p", () => {
+		const result = OPPORTUNITY_SEARCH_SCHEMA.safeParse({
+			title: "Inception",
+			year: 2010,
+			resolution: "1080p",
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("accepts valid resolution 720p", () => {
+		const result = OPPORTUNITY_SEARCH_SCHEMA.safeParse({
+			title: "Inception",
+			year: 2010,
+			resolution: "720p",
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("rejects invalid resolution 480p", () => {
+		const result = OPPORTUNITY_SEARCH_SCHEMA.safeParse({
+			title: "Inception",
+			year: 2010,
+			resolution: "480p",
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("rejects invalid resolution 4K", () => {
+		const result = OPPORTUNITY_SEARCH_SCHEMA.safeParse({
+			title: "Inception",
+			year: 2010,
+			resolution: "4K",
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("rejects invalid resolution UHD", () => {
+		const result = OPPORTUNITY_SEARCH_SCHEMA.safeParse({
+			title: "Inception",
+			year: 2010,
+			resolution: "UHD",
+		});
+		expect(result.success).toBe(false);
+	});
 });
 
 // ──────────────────────────────────────────────
@@ -152,6 +206,25 @@ describe("createVirtualSearchee", () => {
 		const input = { title: "Inception", year: 2010, phase: "confirmed" as const };
 		const searchee = createVirtualSearchee(input);
 		expect(searchee.length).toBe(1);
+	});
+
+	it("appends resolution to name and title when provided", () => {
+		const input = {
+			title: "The Matrix",
+			year: 1999,
+			resolution: "2160p" as const,
+			phase: "confirmed" as const,
+		};
+		const searchee = createVirtualSearchee(input);
+		expect(searchee.name).toBe("The Matrix 1999 2160p");
+		expect(searchee.title).toBe("The Matrix 1999 2160p");
+	});
+
+	it("does not append resolution when omitted", () => {
+		const input = { title: "Inception", year: 2010, phase: "confirmed" as const };
+		const searchee = createVirtualSearchee(input);
+		expect(searchee.name).toBe("Inception 2010");
+		expect(searchee.title).toBe("Inception 2010");
 	});
 });
 
