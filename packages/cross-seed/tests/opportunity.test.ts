@@ -8,8 +8,10 @@ import {
 	sizesAreWithinTolerance,
 	groupPhase1,
 	scorePhase1Groups,
+	selectPhase2Groups,
 	rankOpportunities,
 	Phase2Result,
+	Phase1Group,
 } from "../src/opportunity.js";
 import { SearchPattern } from "../src/constants.js";
 
@@ -397,5 +399,137 @@ describe("rankOpportunities", () => {
 		const { items } = rankOpportunities(results);
 		expect(items[0].trackers).toHaveLength(2);
 		expect(items[0].trackerCount).toBe(2);
+	});
+});
+
+// ──────────────────────────────────────────────
+// Phase-2 Group Selection — golden-tracker slot reservation
+// ──────────────────────────────────────────────
+
+function makePhase1Group(
+	normalizedName: string,
+	trackers: string[],
+	score: number,
+	passesPreFilter = true,
+): Phase1Group {
+	return {
+		normalizedName,
+		representativeSize: 1000,
+		trackers,
+		candidates: trackers.map((t) => makeCandidate(`${normalizedName}-${t}`, t, 1000)),
+		passesPreFilter,
+		score,
+	};
+}
+
+describe("selectPhase2Groups", () => {
+	it("reserves a slot for golden tracker outside top-N — replaces lowest-scoring slot", () => {
+		const groups = [
+			makePhase1Group("release-a", ["Tracker1", "Tracker2", "Tracker3"], 300),
+			makePhase1Group("release-b", ["Tracker4", "Tracker5"], 200),
+			makePhase1Group("release-c", ["HD-Torrents"], 100),
+		];
+		const selected = selectPhase2Groups(groups, 2, "HD-Torrents");
+		expect(selected).toHaveLength(2);
+		// The golden tracker group replaced the lowest-scoring top-2 group
+		expect(selected.some((g) => g.trackers.includes("HD-Torrents"))).toBe(true);
+		// The replacement is the golden tracker group at score 100, not the 200 group
+		expect(selected[selected.length - 1].score).toBe(100);
+	});
+
+	it("no replacement when golden tracker already in top-N", () => {
+		const groups = [
+			makePhase1Group("release-a", ["HD-Torrents", "Tracker2"], 300),
+			makePhase1Group("release-b", ["Tracker3"], 200),
+			makePhase1Group("release-c", ["Tracker4"], 100),
+		];
+		const selected = selectPhase2Groups(groups, 2, "HD-Torrents");
+		expect(selected).toHaveLength(2);
+		expect(selected[0].score).toBe(300);
+		expect(selected[1].score).toBe(200);
+	});
+
+	it("no golden tracker specified — unchanged top-N", () => {
+		const groups = [
+			makePhase1Group("release-a", ["Tracker1", "Tracker2", "Tracker3"], 300),
+			makePhase1Group("release-b", ["Tracker4", "Tracker5"], 200),
+			makePhase1Group("release-c", ["HD-Torrents"], 100),
+		];
+		const selected = selectPhase2Groups(groups, 2);
+		expect(selected).toHaveLength(2);
+		expect(selected[0].score).toBe(300);
+		expect(selected[1].score).toBe(200);
+		// HD-Torrents not selected (no golden tracker requested)
+		expect(selected.some((g) => g.trackers.includes("HD-Torrents"))).toBe(false);
+	});
+
+	it("no golden tracker groups among eligible — no replacement", () => {
+		const groups = [
+			makePhase1Group("release-a", ["Tracker1", "Tracker2"], 300),
+			makePhase1Group("release-b", ["Tracker3"], 200),
+			makePhase1Group("release-c", ["Tracker4"], 100),
+		];
+		const selected = selectPhase2Groups(groups, 2, "HD-Torrents");
+		expect(selected).toHaveLength(2);
+		expect(selected[0].score).toBe(300);
+		expect(selected[1].score).toBe(200);
+	});
+
+	it("case-insensitive golden tracker matching works", () => {
+		const groups = [
+			makePhase1Group("release-a", ["Tracker1", "Tracker2", "Tracker3"], 300),
+			makePhase1Group("release-b", ["Tracker4", "Tracker5"], 200),
+			makePhase1Group("release-c", ["HD-Torrents"], 100),
+		];
+		// Use lowercase "hd-torrents" to match the uppercase "HD-Torrents" tracker
+		const selected = selectPhase2Groups(groups, 2, "hd-torrents");
+		expect(selected).toHaveLength(2);
+		expect(selected.some((g) => g.trackers.includes("HD-Torrents"))).toBe(true);
+	});
+
+	it("replacement draws from eligible-only pool — pre-filter-failed groups not eligible", () => {
+		const groups = [
+			makePhase1Group("release-a", ["Tracker1", "Tracker2"], 300),
+			makePhase1Group("release-b", ["Tracker3"], 200),
+			// This group has the golden tracker but FAILED pre-filter
+			makePhase1Group("golden-failed", ["HD-Torrents"], 150, false),
+			// This group has the golden tracker and PASSED pre-filter
+			makePhase1Group("golden-eligible", ["HD-Torrents", "Tracker4"], 140, true),
+		];
+		const selected = selectPhase2Groups(groups, 2, "HD-Torrents");
+		expect(selected).toHaveLength(2);
+		// The golden-eligible group (score 140) should replace the lowest slot
+		expect(selected.some((g) => g.normalizedName === "golden-eligible")).toBe(true);
+		// The pre-filter-failed group should NOT be the replacement
+		expect(selected.some((g) => g.normalizedName === "golden-failed")).toBe(false);
+	});
+
+	it("sort stability — equal-score groups: lowest slot is reliably the last element", () => {
+		const groups = [
+			makePhase1Group("release-a", ["Tracker1", "Tracker2", "Tracker3"], 300),
+			makePhase1Group("release-b", ["Tracker4", "Tracker5"], 200),
+			makePhase1Group("release-c", ["Tracker6", "Tracker7"], 200),
+			makePhase1Group("release-d", ["Tracker8"], 100),
+			makePhase1Group("release-e", ["HD-Torrents"], 150),
+		];
+		const selected = selectPhase2Groups(groups, 3, "HD-Torrents");
+		expect(selected).toHaveLength(3);
+		expect(selected.some((g) => g.trackers.includes("HD-Torrents"))).toBe(true);
+		// The replaced slot should be score 100 (the true minimum), not one of the
+		// score-200 groups — they are all higher than 150.
+		expect(selected[selected.length - 1].score).toBe(150);
+	});
+
+	it("handles empty groups array", () => {
+		const selected = selectPhase2Groups([], 5, "HD-Torrents");
+		expect(selected).toHaveLength(0);
+	});
+
+	it("handles all pre-filter-failed groups — no eligible candidates", () => {
+		const groups = [
+			makePhase1Group("release-a", ["HD-Torrents"], 300, false),
+		];
+		const selected = selectPhase2Groups(groups, 5, "HD-Torrents");
+		expect(selected).toHaveLength(0);
 	});
 });

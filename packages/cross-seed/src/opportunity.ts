@@ -381,24 +381,88 @@ export interface Phase2Outcome {
 const DEFAULT_TOP_N = 5;
 
 /**
- * Select top-N Phase-1 groups, fetch .torrent files, confirm infoHashes.
+ * Check whether any candidate in a Phase-1 group has a tracker matching
+ * the golden tracker name (case-insensitive exact match).
+ */
+function groupContainsGoldenTracker(
+	group: Phase1Group,
+	goldenTracker: string,
+): boolean {
+	return group.trackers.some(
+		(t) => t.toLowerCase() === goldenTracker.toLowerCase(),
+	);
+}
+
+/**
+ * Pure selection logic for Phase-2 groups — no I/O, testable.
+ *
+ * Returns the subset of groups to process in Phase-2, applying golden-tracker
+ * slot reservation when specified.
+ *
+ * When `goldenTracker` is specified, if none of the top-N groups contain the
+ * golden tracker, the lowest-scoring selected group is replaced by the
+ * highest-scoring golden-tracker-containing group from the remaining eligible
+ * pool.  This guarantees at least one Phase-2 fetch slot for the golden
+ * tracker regardless of Phase-1 score.
+ *
+ * The replacement pool is strictly `passesPreFilter === true` groups — a group
+ * that was correctly eliminated by the Phase-1 pre-filter is never promoted
+ * on golden-tracker grounds alone.
+ */
+export function selectPhase2Groups(
+	groups: Phase1Group[],
+	topN?: number,
+	goldenTracker?: string,
+): Phase1Group[] {
+	const n = topN ?? DEFAULT_TOP_N;
+
+	// Sort on a fresh copy to maintain stable sort guarantee
+	const eligible = groups
+		.filter((g) => g.passesPreFilter)
+		.sort((a, b) => b.score - a.score);
+
+	const selected = eligible.slice(0, n);
+
+	// Golden-tracker slot reservation
+	if (goldenTracker !== undefined && selected.length > 0) {
+		const alreadyHasGolden = selected.some((g) =>
+			groupContainsGoldenTracker(g, goldenTracker),
+		);
+		if (!alreadyHasGolden) {
+			// Find the best golden-tracker group from the remaining eligible pool
+			const remaining = eligible.filter((g) => !selected.includes(g));
+			const goldenInRemaining = remaining.filter((g) =>
+				groupContainsGoldenTracker(g, goldenTracker!),
+			);
+			if (goldenInRemaining.length > 0) {
+				// Replace the lowest-scoring selected group with the best
+				// golden-tracker candidate (goldenInRemaining is already
+				// sorted descending by score from the eligible sort).
+				selected[selected.length - 1] = goldenInRemaining[0];
+			}
+		}
+	}
+
+	return selected;
+}
+
+/**
+ * Select top-N Phase-1 groups (with optional golden-tracker slot reservation),
+ * fetch .torrent files, confirm infoHashes.
  */
 export async function runPhase2(
 	groups: Phase1Group[],
 	infoHashesToExclude: Set<string>,
 	blockList: string[],
 	topN?: number,
+	goldenTracker?: string,
 ): Promise<Phase2Outcome> {
-	const n = topN ?? DEFAULT_TOP_N;
-	const eligible = groups
-		.filter((g) => g.passesPreFilter)
-		.sort((a, b) => b.score - a.score)
-		.slice(0, n);
+	const selected = selectPhase2Groups(groups, topN, goldenTracker);
 
 	const confirmed: Phase2Result[] = [];
 	let trackerFetchFailures = 0;
 
-	for (const group of eligible) {
+	for (const group of selected) {
 		// Fetch .torrent for each candidate in the group
 		// TODO: early-exit after first successful snatch() in a Phase-1 group.
 		// All candidates in a Phase-1 group share the same (normalizedName, size),
@@ -473,7 +537,7 @@ export async function runPhase2(
 		});
 	}
 
-	return { confirmed, trackerFetchFailures, groupsFetched: eligible.length };
+	return { confirmed, trackerFetchFailures, groupsFetched: selected.length };
 }
 
 // ──────────────────────────────────────────────
@@ -633,6 +697,8 @@ export async function searchOpportunities(
 			scoredGroups.filter((g) => g.passesPreFilter),
 			infoHashesToExclude,
 			blockList,
+			undefined, // topN — use default
+			input.goldenTracker,
 		);
 		trackerFetchFailures = outcome.trackerFetchFailures;
 		candidatesFetched = outcome.groupsFetched;

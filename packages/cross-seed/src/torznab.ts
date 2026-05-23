@@ -127,6 +127,17 @@ export type CachedSearch = {
 	ids?: ExternalIds;
 };
 
+/**
+ * Normalize a tracker name from a Torznab result item.
+ * Strips common Prowlarr/Jackett suffixed tags case-insensitively.
+ */
+export function normalizeTrackerName(raw: string): string {
+	return raw
+		.trim()
+		.replace(/\s*\(API\)\s*$/i, "")
+		.replace(/\s*\(RSS\)\s*$/i, "");
+}
+
 function parseTorznabResults(
 	xml: TorznabResults,
 	indexerId: number,
@@ -139,15 +150,12 @@ function parseTorznabResults(
 	return items.map((item) => ({
 		guid: item.guid[0],
 		name: item.title[0],
-		tracker: (
+		tracker: normalizeTrackerName(
 			item?.prowlarrindexer?.[0]?._ ??
-			item?.jackettindexer?.[0]?._ ??
-			item?.indexer?.[0]?._ ??
-			UNKNOWN_TRACKER
-		)
-			.trim()
-			.replace(/\s*\(API\)\s*$/, "")
-			.replace(/\s*\(RSS\)\s*$/, ""),
+				item?.jackettindexer?.[0]?._ ??
+				item?.indexer?.[0]?._ ??
+				UNKNOWN_TRACKER,
+		),
 		link: item.link[0],
 		size: Number(item.size[0]),
 		pubDate: new Date(item.pubDate[0]).getTime(),
